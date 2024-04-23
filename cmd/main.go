@@ -4,27 +4,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shokHorizon/proxyChecker/config"
+	"github.com/shokHorizon/proxyChecker/internal/models"
 	"github.com/shokHorizon/proxyChecker/internal/parser"
-	"github.com/shokHorizon/proxyChecker/internal/parser/source"
 	"github.com/shokHorizon/proxyChecker/internal/pinger"
-	"github.com/shokHorizon/proxyChecker/internal/saver"
 	"sync"
 	"time"
 )
 
 const (
-	maxConn     = 5000
-	maxWorkers  = 500
-	maxRequests = 1
-	steamPages  = 200
+	maxConn    = 5000
+	maxWorkers = 500
 )
 
 func main() {
+	cfg, err := config.NewConfig()
+	if err != nil {
+		panic(err)
+	}
 	ctx, _ := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 
-	chProxy := make(chan string, 400)
-	chProved := make(chan string, 400)
+	chProxy := make(chan models.Proxy, 400)
+	//chProved := make(chan string, 400)
 	pMutex := sync.Mutex{}
 	proxies := 0
 
@@ -32,26 +34,19 @@ func main() {
 	go func() {
 		defer wg.Done()
 		pwg := sync.WaitGroup{}
-		parsers := []parser.ProxyParser{
-			source.NewFreeProxyList(),
-			source.NewFreeProxyWorld(),
-			source.NewHideMyLife(),
-			source.NewHideMyName(),
-			source.NewIpRoyal(),
-		}
-		for _, page := range parsers {
+		for _, sourceCfg := range cfg.Sources {
+			source := parser.NewFromConfig(sourceCfg)
 			pwg.Add(1)
-			page := page
 			go func() {
 				defer pwg.Done()
-				for _, url := range page.GetUrls() {
-					ctx, _ := context.WithTimeout(ctx, time.Second*5)
-					result, err := page.Parse(ctx, url)
+				for _, url := range source.GetUrls() {
+					ctx, _ := context.WithTimeout(ctx, time.Second*10)
+					result, err := source.Parse(ctx, url)
 					if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 						fmt.Println("Some error has occured: %s", err)
 						return
 					}
-					fmt.Println(page.GetName(), "got", len(result), "proxies")
+					fmt.Println(source.GetName(), "got", len(result), "proxies")
 					for _, proxy := range result {
 						proxy := proxy
 						select {
@@ -62,7 +57,7 @@ func main() {
 						}
 					}
 				}
-				fmt.Println(page.GetName(), "end")
+				fmt.Println(source.GetName(), "end")
 			}()
 		}
 		pwg.Wait()
@@ -84,15 +79,21 @@ func main() {
 						if !done {
 							return
 						}
-						err := pinger.CheckProxy(ctx, proxy)
+						err := pinger.CheckProxy(ctx, &proxy)
+						if err != nil {
+							err = pinger.CheckProxySocks(ctx, &proxy)
+							if err != nil {
+								err = pinger.CheckProxySocks(ctx, &proxy)
+							}
+						}
 						if err == nil {
 							pMutex.Lock()
-							fmt.Println(proxies, "Working:", proxy)
+							fmt.Println(proxies, proxy.Origin, "Working:", proxy.Url())
 							proxies += 1
-							chProved <- proxy
+							//chProved <- provider
 							pMutex.Unlock()
 						} else {
-							//fmt.Println("Dead:", proxy, err)
+							//fmt.Println("Dead:", provider, err)
 						}
 						continue
 					case <-ctx.Done():
@@ -102,27 +103,27 @@ func main() {
 			}()
 		}
 		wgp.Wait()
-		close(chProved)
+		//close(chProved)
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case proxy, done := <-chProved:
-				if !done {
-					return
-				}
-				err := saver.SavePage(ctx, proxy, 0)
-				if err != nil {
-					fmt.Println("saver error:", err)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	//wg.Add(1)
+	//go func() {
+	//	defer wg.Done()
+	//	for {
+	//		select {
+	//		case provider, done := <-chProved:
+	//			if !done {
+	//				return
+	//			}
+	//			err := saver.SavePage(ctx, provider, 0)
+	//			if err != nil {
+	//				fmt.Println("saver error:", err)
+	//			}
+	//		case <-ctx.Done():
+	//			return
+	//		}
+	//	}
+	//}()
 
 	wg.Wait()
 }

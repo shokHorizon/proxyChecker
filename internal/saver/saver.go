@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const steamUrl = "https://steamcommunity.com/market/search?appid=730#p%d_quantity_asc"
+const steamUrl = `https://steamcommunity.com/market/search/render/?query=&start=%d&count=100&search_descriptions=0&sort_column=popular&sort_dir=desc&appid=730&norender=1`
 
 func SavePage(ctx context.Context, proxyUrl string, index int) error {
 	proxy, err := url.Parse("http://" + proxyUrl)

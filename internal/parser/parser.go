@@ -2,9 +2,12 @@ package parser
 
 import (
 	"context"
+	"github.com/shokHorizon/proxyChecker/config"
+	"github.com/shokHorizon/proxyChecker/internal/models"
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 )
 
 type ProxyParser interface {
@@ -14,9 +17,26 @@ type ProxyParser interface {
 }
 
 type GenericParser struct {
-	Re   regexp.Regexp
-	Urls []string
-	Name string
+	Re     regexp.Regexp
+	Header http.Header
+	Urls   []string
+	Name   string
+}
+
+func NewFromConfig(cfg config.Source) *GenericParser {
+	parser := &GenericParser{
+		Re:     *regexp.MustCompile(cfg.Regexp),
+		Header: http.Header{},
+		Urls:   cfg.Urls,
+		Name:   cfg.Name,
+	}
+
+	for _, header := range cfg.Headers {
+		keyVal := strings.SplitN(header, ": ", 2)
+		parser.Header.Set(keyVal[0], keyVal[1])
+	}
+
+	return parser
 }
 
 func (gp GenericParser) GetRe() *regexp.Regexp {
@@ -31,13 +51,13 @@ func (gp GenericParser) GetName() string {
 	return gp.Name
 }
 
-func (gp GenericParser) Parse(ctx context.Context, url string) ([]string, error) {
+func (gp GenericParser) Parse(ctx context.Context, url string) ([]models.Proxy, error) {
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header = gp.Header
 
 	// Make request
 	client := &http.Client{}
@@ -55,14 +75,14 @@ func (gp GenericParser) Parse(ctx context.Context, url string) ([]string, error)
 
 	content := string(bytes)
 
-	addresses := make([]string, 0, 4)
+	proxies := make([]models.Proxy, 0, 100)
 	matches := gp.GetRe().FindAllStringSubmatch(content, -1)
 
 	for _, match := range matches {
 		ip := match[1]
 		port := match[2]
-		addresses = append(addresses, ip+":"+port)
+		proxies = append(proxies, *models.NewProxy(models.JoinIpPort(ip, port), gp.Name, "http"))
 	}
 
-	return addresses, nil
+	return proxies, nil
 }
