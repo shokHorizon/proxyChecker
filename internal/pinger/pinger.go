@@ -19,25 +19,21 @@ const (
 )
 
 type Pinger struct {
-	cfg      config.Pinger
-	receiver <-chan *models.Proxy
-	sender   chan<- *models.Proxy
+	cfg config.Pinger
 }
 
-func NewPinger(cfg config.Pinger, r <-chan *models.Proxy, s chan<- *models.Proxy) *Pinger {
+func NewPinger(cfg config.Pinger) *Pinger {
 	return &Pinger{
-		cfg:      cfg,
-		receiver: r,
-		sender:   s,
+		cfg: cfg,
 	}
 }
 
-func (p *Pinger) Run(ctx context.Context) {
+func (p *Pinger) Run(ctx context.Context, r <-chan *models.Proxy, s chan<- *models.Proxy) {
 	wg := errgroup.Group{}
 	wg.SetLimit(p.cfg.Workers)
 	for {
 		select {
-		case pr, ok := <-p.receiver:
+		case pr, ok := <-r:
 			if !ok {
 				break
 			}
@@ -50,10 +46,9 @@ func (p *Pinger) Run(ctx context.Context) {
 							return err
 						}
 					}
-					p.sender <- pr
+					s <- pr
 					return nil
 				})
-
 		case <-ctx.Done():
 			break
 		}
@@ -82,7 +77,8 @@ func CheckProxyHTTP(ctx context.Context, p *models.Proxy) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+
+	defer resp.Body.Close()
 
 	return nil
 }
@@ -114,7 +110,8 @@ func CheckProxySocks(ctx context.Context, p *models.Proxy) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+
+	defer resp.Body.Close()
 
 	return nil
 }

@@ -36,7 +36,7 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-	ping := pinger.NewPinger(cfg.Pinger, chProxy, chProved)
+	ping := pinger.NewPinger(cfg.Pinger)
 	prov := provider.NewProvider(cfg.Provider)
 
 	wg.Add(1)
@@ -76,7 +76,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ping.Run(ctx)
+		ping.Run(ctx, chProxy, chProved)
 		close(chProved)
 	}()
 
@@ -97,6 +97,7 @@ func main() {
 		fmt.Println("Interrupt signal received, exiting...")
 		cancel()
 	case <-ctx.Done():
+		fmt.Println("Context done, exiting...")
 		break
 	}
 }
