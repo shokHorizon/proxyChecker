@@ -3,14 +3,65 @@ package pinger
 import (
 	"context"
 	"crypto/tls"
+	"github.com/shokHorizon/proxyChecker/config"
 	"github.com/shokHorizon/proxyChecker/internal/models"
 	"golang.org/x/net/proxy"
+	"golang.org/x/sync/errgroup"
 	"net/http"
 	"net/url"
 	"time"
 )
 
-func CheckProxy(ctx context.Context, p *models.Proxy) error {
+const (
+	checkURL2 = "https://2ip.ru"
+	checkURL  = "https://steamcommunity.com/market/search/render/?query=&start=0&count=100&search_descriptions=0&sort_column=popular&sort_dir=desc&appid=730&norender=1"
+	agent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+type Pinger struct {
+	cfg      config.Pinger
+	receiver <-chan *models.Proxy
+	sender   chan<- *models.Proxy
+}
+
+func NewPinger(cfg config.Pinger, r <-chan *models.Proxy, s chan<- *models.Proxy) *Pinger {
+	return &Pinger{
+		cfg:      cfg,
+		receiver: r,
+		sender:   s,
+	}
+}
+
+func (p *Pinger) Run(ctx context.Context) {
+	wg := errgroup.Group{}
+	wg.SetLimit(p.cfg.Workers)
+	for {
+		select {
+		case pr, ok := <-p.receiver:
+			if !ok {
+				break
+			}
+			wg.Go(
+				func() error {
+					err := CheckProxyHTTP(ctx, pr)
+					if err != nil {
+						err = CheckProxySocks(ctx, pr)
+						if err != nil {
+							return err
+						}
+					}
+					p.sender <- pr
+					return nil
+				})
+
+		case <-ctx.Done():
+			break
+		}
+	}
+	wg.Wait()
+}
+
+func CheckProxyHTTP(ctx context.Context, p *models.Proxy) error {
 	pUrl, err := url.Parse(p.Url())
 	if err != nil {
 		return err
@@ -21,10 +72,11 @@ func CheckProxy(ctx context.Context, p *models.Proxy) error {
 
 	ctxT, _ := context.WithTimeout(ctx, time.Second*10)
 
-	req, err := http.NewRequestWithContext(ctxT, "GET", "https://steamcommunity.com/market/search/render/?query=&start=0&count=100&search_descriptions=0&sort_column=popular&sort_dir=desc&appid=730&norender=1", nil)
+	req, err := http.NewRequestWithContext(ctxT, "GET", checkURL, nil)
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", agent)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -52,11 +104,11 @@ func CheckProxySocks(ctx context.Context, p *models.Proxy) error {
 
 	ctx, _ = context.WithTimeout(ctx, time.Second*10)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://steamcommunity.com/market/search/render/?query=&start=0&count=100&search_descriptions=0&sort_column=popular&sort_dir=desc&appid=730&norender=1", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", checkURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", agent)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -84,11 +136,11 @@ func CheckProxyHTTPS(ctx context.Context, p *models.Proxy) error {
 
 	ctxT, _ := context.WithTimeout(ctx, time.Second*10)
 
-	req, err := http.NewRequestWithContext(ctxT, "GET", "https://steamcommunity.com/market/search/render/?query=&start=0&count=100&search_descriptions=0&sort_column=popular&sort_dir=desc&appid=730&norender=1", nil)
+	req, err := http.NewRequestWithContext(ctxT, "GET", checkURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", agent)
 
 	resp, err := client.Do(req)
 	if err != nil {

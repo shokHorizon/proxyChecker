@@ -8,7 +8,11 @@ import (
 	"github.com/shokHorizon/proxyChecker/internal/models"
 	"github.com/shokHorizon/proxyChecker/internal/parser"
 	"github.com/shokHorizon/proxyChecker/internal/pinger"
+	"github.com/shokHorizon/proxyChecker/internal/provider"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -22,13 +26,18 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	ctx, _ := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 
-	chProxy := make(chan models.Proxy, 400)
-	//chProved := make(chan string, 400)
-	pMutex := sync.Mutex{}
-	proxies := 0
+	chProxy := make(chan *models.Proxy, 100)
+	chProved := make(chan *models.Proxy, 100)
+
+	// Waiting signal
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+
+	ping := pinger.NewPinger(cfg.Pinger, chProxy, chProved)
+	prov := provider.NewProvider(cfg.Provider)
 
 	wg.Add(1)
 	go func() {
@@ -50,7 +59,7 @@ func main() {
 					for _, proxy := range result {
 						proxy := proxy
 						select {
-						case chProxy <- proxy:
+						case chProxy <- &proxy:
 							continue
 						case <-ctx.Done():
 							break
@@ -67,63 +76,27 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		wgp := sync.WaitGroup{}
-		for i := 0; i < maxConn; i++ {
-
-			wgp.Add(1)
-			go func() {
-				defer wgp.Done()
-				for {
-					select {
-					case proxy, done := <-chProxy:
-						if !done {
-							return
-						}
-						err := pinger.CheckProxy(ctx, &proxy)
-						if err != nil {
-							err = pinger.CheckProxySocks(ctx, &proxy)
-							if err != nil {
-								err = pinger.CheckProxySocks(ctx, &proxy)
-							}
-						}
-						if err == nil {
-							pMutex.Lock()
-							fmt.Println(proxies, proxy.Origin, "Working:", proxy.Url())
-							proxies += 1
-							//chProved <- provider
-							pMutex.Unlock()
-						} else {
-							//fmt.Println("Dead:", provider, err)
-						}
-						continue
-					case <-ctx.Done():
-						return
-					}
-				}
-			}()
-		}
-		wgp.Wait()
-		//close(chProved)
+		ping.Run(ctx)
+		close(chProved)
 	}()
 
-	//wg.Add(1)
-	//go func() {
-	//	defer wg.Done()
-	//	for {
-	//		select {
-	//		case provider, done := <-chProved:
-	//			if !done {
-	//				return
-	//			}
-	//			err := saver.SavePage(ctx, provider, 0)
-	//			if err != nil {
-	//				fmt.Println("saver error:", err)
-	//			}
-	//		case <-ctx.Done():
-	//			return
-	//		}
-	//	}
-	//}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		prov.Run(ctx, chProved)
+	}()
 
-	wg.Wait()
+	// Done ctx on wg.Wait()
+	go func() {
+		wg.Wait()
+		cancel()
+	}()
+
+	select {
+	case <-interrupt:
+		fmt.Println("Interrupt signal received, exiting...")
+		cancel()
+	case <-ctx.Done():
+		break
+	}
 }
